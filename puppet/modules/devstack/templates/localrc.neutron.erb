@@ -1,0 +1,49 @@
+HOST_IP=<%= @local_ip_data_nw %>
+
+FLOATING_RANGE=192.168.58.0/24
+NETWORK_GATEWAY=10.10.0.1
+FIXED_RANGE=10.10.0.0/24
+
+PUBLIC_INTERFACE=eth3
+
+OVS_ENABLE_TUNNELING=True
+ENABLE_TENANT_TUNNELS=True
+TENANT_TUNNEL_RANGES=1:1000
+OVS_VLAN_RANGES=
+
+MULTI_HOST=1
+ADMIN_PASSWORD=ppp
+MYSQL_PASSWORD=ppp
+RABBIT_PASSWORD=ppp
+SERVICE_PASSWORD=ppp
+SERVICE_TOKEN=xyzpdqlazydog
+
+LOG=True
+SYSLOG=True
+LOGFILE=<%= @devstack_dir %>/logs/stack.sh.log
+SCREEN_LOGDIR=<%= @devstack_dir %>/screenlogs
+
+DATA_DIR=<%= @openstack_data_dir %>
+SWIFT_DATA_DIR=<%= @openstack_data_dir %>
+
+CONTROL_HOST=<%= @control_ip_mngt_nw %>
+SERVICE_HOST=$CONTROL_HOST
+MYSQL_HOST=$CONTROL_HOST
+RABBIT_HOST=$CONTROL_HOST
+GLANCE_HOSTPORT=$CONTROL_HOST:9292
+Q_HOST=$CONTROL_HOST
+KEYSTONE_AUTH_HOST=$CONTROL_HOST
+KEYSTONE_SERVICE_HOST=$CONTROL_HOST
+Q_META_DATA_IP=$CONTROL_HOST
+DATABASE_TYPE=mysql # fix missing sql_connection in quantum plugin
+
+ENABLED_SERVICES=q-agt,neutron,q-dhcp,q-l3,rabbit,q-meta,q-metering
+Q_USE_SECGROUP=True
+
+# repo
+NOVA_BRANCH=<%= @devstack_branch %>
+CINDER_BRANCH=<%= @devstack_branch %>
+GLANCE_BRANCH=<%= @devstack_branch %>
+KEYSTONE_BRANCH=<%= @devstack_branch %>
+QUANTUM_BRANCH=<%= @devstack_branch %>
+HORIZON_BRANCH=<%= @devstack_branch %>

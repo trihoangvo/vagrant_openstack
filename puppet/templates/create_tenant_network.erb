@@ -1,0 +1,810 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2014 Deutsche Telekom
+# Author: Tri Hoang Vo <vohoangtri at gmail.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# Script to create, delete, migrate per-tenant router with private network
+# Puppet configs this script for each POD. Do not change any configs
+#
+# How to use?
+# On control node run: ./tenant-network help
+
+# Configurations to create tenant network
+# -------------------------------------------------------------
+# external network
+PUBLIC_NET_NAME=<%= public_net_name %>
+PUBLIC_SUBNET_NAME=sub$PUBLIC_NET_NAME
+PUBLIC_NET_RANGE=<%= public_net_range %>
+PUBLIC_NET_GATEWAY=<%= public_net_gateway %>
+POOL_START=<%= pool_start %>
+POOL_END=<%= pool_end %>
+PUBLIC_IF=<%= public_if %>
+
+# Source admin authentication
+# ---------------------------
+source /root/openrc
+
+# Functions
+# ---------
+
+function set_tenant_net () {
+  ROUTER_NAME=router_$TENANT_NAME
+  PRIVATE_NET_NAME=net_$TENANT_NAME
+  PRIVATE_SUBNET_NAME=sub$PRIVATE_NET_NAME
+  PRIVATE_NET_RANGE=${PRIVATE_NET_RANGE:-<%= private_net_range %>}
+}
+
+# get a field value from a python PrettyTable format
+# search all rows in table for matching given text and return given column
+# example: get_field 'text' column
+function get_field() {
+  while read data; do
+    colum="\$$(($2 + 1))"
+    echo "$data" | grep " $1 " | awk -F'[ \t]*\\|[ \t]*' "{print $colum}"
+  done
+}
+
+# ask question, continue with y, otherwise exit
+function ask_question() {
+  if [[ -z $FORCE ]]; then
+    QUESTION=$1
+    while true; do
+      read -p "$QUESTION [y/n]" yn
+      case $yn in
+          [Yy]* ) break;;
+          [Nn]* ) exit;;
+          * ) echo "Please answer yes or no.";;
+      esac
+    done
+  fi
+}
+
+# ask question, return answer
+function ask_question_yn() {
+  QUESTION=$1
+  while true; do
+    read -p "$QUESTION [y/n]" yn
+    case $yn in
+        [Yy]* ) ANSWER=y
+                break;;
+        [Nn]* ) ANSWER=n
+                break;;
+        * ) echo "Please answer yes or no.";;
+    esac
+  done
+  echo $ANSWER
+}
+
+
+function warning() {
+  echo >&2 -e "\e[1;31mWARNING: $1 \e[0m"
+}
+
+# check if the given agent type is active on the given hostname
+# if agent is inactive and you dont want to continue, set 3rd param to exit
+function check_agent_active() {
+  AGENT_STATUS=$(quantum agent-list --agent_type="$1" --host=$2)
+  if [[ -z $AGENT_STATUS ]]; then
+    warning "Found no agents on host $2. Input hostname is wrong?"
+    exit 1
+  fi
+  echo "$AGENT_STATUS" | grep ':-)' >& /dev/null
+  if [[ $? -eq 1 ]]
+  then
+    if [[ $3 = exit ]]; then
+      warning "Agent $1 on host $2: not active"
+      echo "It must be active to continue. Force quit!"
+      exit 1
+    else
+      warning "Agent $1 on host $2: not active"
+      SOURCE_AGENTS_ACTIVE=false
+    fi
+  else
+    echo "  Agent $1 on host $2: active"
+  fi
+}
+
+# get uuid of agent_type on the given hostname
+function get_agent_id() {
+  quantum agent-list --agent_type="$1" | get_field $2 1
+}
+
+# get configs of the given agent at runtime
+function get_agent_configs() {
+  quantum agent-show $1 -f shell --variable configurations
+}
+
+# get a device status from agent configs
+function get_agent_property() {
+  VALUE=$(echo "$2" | awk -F':' "/\"$1/ { print \$2 }" | tr -d ', ')
+  echo >&2 -e "    $1: $VALUE\c"
+  if [[ $VALUE -ne 0 ]]
+  then
+    echo $VALUE
+  else
+    echo 0
+  fi
+}
+
+# get fqdn for given hostname
+function add_domain_to_host() {
+  DOMAIN=$(hostname -d)
+  echo $1 | grep $DOMAIN
+  if [[ $? -eq 1 ]]; then
+    FQDN="$1.$DOMAIN"
+  fi
+  echo $FQDN
+}
+
+# check existing tenant or ask to create a new one
+function get_or_create_tenant () {
+  # get tenant id
+  TENANT_ID=$(keystone tenant-list | get_field $TENANT_NAME 1)
+  if [[ -z $TENANT_ID ]]; then
+    ask_question "Tenant $TENANT_NAME does not exist. Do you want to create a new one and continue?"
+    TENANT_ID=$(keystone tenant-create --name $TENANT_NAME \
+                --description "$TENANT_DESCRIPTION" \
+              | get_field id 2)
+    echo "Created tenant $TENANT_NAME with uuid $TENANT_ID"
+  fi
+}
+
+# get router id of the tenant
+function get_tenant_router() {
+  TENANT_ID=$(keystone tenant-list | get_field $TENANT_NAME 1)
+  ROUTER_ID=$(quantum router-list --tenant_id=$TENANT_ID \
+              | awk -F'|' '!/^(\\+--)|name/ { print $2 }')
+  echo $ROUTER_ID
+}
+
+# add users as role Member in tenant, if not exist
+function add_tenant_users_role () {
+  if [[ -n TENANT_ID ]]; then
+    for USER_NAME in "${USERS[@]}"
+      do
+        USER_ID=$(keystone user-list | get_field $USER_NAME 1)
+        if [[ -z $USER_ID ]]; then
+          echo "Found no user $USER_NAME. Quit"
+          exit 1
+        else
+          USER_ROLE=$(keystone user-role-list --user-id $USER_ID \
+                      --tenant-id $TENANT_ID | get_field $USER_ID 2)
+          if [[ $USER_ROLE = Member ]]; then
+            echo "User $USER_NAME already has Role Member. Skip add role."
+          else
+            keystone user-role-add --user-id $USER_ID --role Member \
+                                   --tenant-id $TENANT_ID >& /dev/null
+            if [[ $? -ne 0 ]]; then
+              echo "Could not add user $USER_NAME for tenant $TENANT_NAME as role Member"
+              exit 1
+            fi
+            echo "Added user $USER_NAME for tenant $TENANT_NAME as role Member"
+          fi
+        fi
+    done
+  fi
+}
+
+# create external network if not exist
+function create_ext_network() {
+  # Test for connections to quantum endpoint when puppet first run
+  quantum net-list >& /dev/null
+  if [[ $? -eq 1 ]]
+  then
+    echo "Could not connect to quantum server endpoint. If this is the first puppet
+run, sometimes quantum server might not yet running properly, you have to exec
+the script manually to create external network afterwards"
+    exit 1
+  fi
+
+  PUBLIC_NET_ID=$(quantum net-list --router:external=True \
+                  | get_field $PUBLIC_NET_NAME 1)
+  # ignore if network already exist
+  if [[ -z $PUBLIC_NET_ID ]]
+  then
+    # create public network
+    PUBLIC_NET_ID=$(quantum net-create $PUBLIC_NET_NAME -- \
+                    --router:external=True \
+                    | get_field 'id' 2)
+    echo "Created external network $PUBLIC_NET_NAME with uuid $PUBLIC_NET_ID"
+    # create public subnet
+    PUBLIC_SUBNET_ID=$(quantum subnet-create $PUBLIC_NET_ID $PUBLIC_NET_RANGE \
+                    --name=$PUBLIC_SUBNET_NAME \
+                    --enable_dhcp=False \
+                    --gateway_ip=$PUBLIC_NET_GATEWAY \
+                    --allocation-pool start=$POOL_START,end=$POOL_END \
+                    | get_field 'id' 2)
+    echo "Created external subnet $PUBLIC_NET_NAME with uuid $PUBLIC_SUBNET_ID"
+  fi
+}
+
+# create tenant router if not exist
+# also schedule the deployment of router, if $TARGET_HOST is given
+function get_or_create_tenant_router() {
+  ROUTER_ID=$(quantum router-list --tenant_id=$TENANT_ID \
+              | awk -F'|' '!/^(\\+--)|name/ { print $2 }')
+  if [[ -z $ROUTER_ID ]]
+  then
+    # Schedule the deployment of router
+    if [[ -n $TARGET_HOST ]]
+    then
+      # check L3 agent running on the given network node to host the router
+      check_agent_active 'L3 agent' $TARGET_HOST exit
+      L3_AGENT_ID=$( get_agent_id 'L3 agent' $TARGET_HOST )
+    fi
+    # create tenant router
+    ROUTER_ID=$(quantum router-create --tenant_id $TENANT_ID $ROUTER_NAME \
+                | get_field 'id' 2)
+    echo "Created router $ROUTER_NAME with uuid $ROUTER_ID"
+
+    # if schedule, assign router to agent
+    if [[ -n $L3_AGENT_ID ]]; then
+      echo "Found L3 agent on host $TARGET_HOST with uuid $L3_AGENT_ID"
+      echo "Assign router $ROUTER_ID to the L3 agent $L3_AGENT_ID explicitly"
+      quantum l3-agent-router-add $L3_AGENT_ID $ROUTER_ID
+    fi
+
+    # Set the external network gateway for tenant router, using admin right
+    quantum router-gateway-set $ROUTER_ID $PUBLIC_NET_ID
+  fi
+}
+
+# create per tenant router with private network, if not exist
+# also schedule the deployment of router and dhcp, if $TARGET_HOST is given
+function create_tenant_network() {
+  if [[ -z $TARGET_HOST ]]
+  then
+    warning "Missing mandatory param -o TARGET_HOST"
+    exit
+  fi
+  TARGET_HOST=$(add_domain_to_host $TARGET_HOST)
+  if [[ -z $TENANT_NAME ]]
+  then
+    echo "No tenant name was given. Skip create tenant network"
+  else
+    # check existing tenant or ask to create a new one
+    get_or_create_tenant
+    # add user-role if option -u is set
+    add_tenant_users_role
+
+    PRIVATE_NET_ID=$(quantum net-list --router:external=False --tenant_id=$TENANT_ID \
+                     | get_field $PRIVATE_NET_NAME 1)
+    # create tenant network if not exist
+    if [[ -n $PRIVATE_NET_ID ]]; then
+      echo "Found network $PRIVATE_NET_ID for tenant $TENANT_NAME. Quit"
+    else
+      # create tenant router if not exist
+      get_or_create_tenant_router
+
+      # Schedule the deployment of dhcp
+      if [[ -n $TARGET_HOST ]]
+      then
+        # check DHCP agent running on the given network node
+        check_agent_active 'DHCP agent' $TARGET_HOST exit
+        DHCP_AGENT_ID=$( get_agent_id 'DHCP agent' $TARGET_HOST )
+      fi
+      # create private network
+      PRIVATE_NET_ID=$(quantum net-create --tenant_id $TENANT_ID $PRIVATE_NET_NAME \
+                     | get_field 'id' 2)
+      echo "Created private network $PRIVATE_NET_NAME with uuid $PRIVATE_NET_ID"
+
+      # if schedule, assign dhcp to agent
+      if [[ -n $DHCP_AGENT_ID ]]; then
+        echo "Found DHCP agent on host $TARGET_HOST with uuid $DHCP_AGENT_ID"
+        echo "Assign private network $PRIVATE_NET_ID to DHCP agent $DHCP_AGENT_ID explicitly"
+        quantum dhcp-agent-network-add $DHCP_AGENT_ID $PRIVATE_NET_ID
+      fi
+
+      # Create subnet in private network
+      for i in "${NAMESERVERS[@]}"
+        do
+          DNS_STRING+=" --dns-nameserver $i"
+      done
+      PRIVATE_SUBNET_ID=$(quantum subnet-create $PRIVATE_NET_ID $PRIVATE_NET_RANGE \
+                          --name=$PRIVATE_SUBNET_NAME $DNS_STRING \
+                          --tenant_id $TENANT_ID \
+                         | get_field 'id' 2)
+      echo "Created private subnet $PRIVATE_SUBNET_NAME with uuid $PRIVATE_SUBNET_ID"
+
+      # finally add private subnet to router, using tenant right
+      quantum router-interface-add --tenant_id=$TENANT_ID $ROUTER_ID $PRIVATE_SUBNET_ID
+    fi
+  fi
+}
+
+# delete a tenant network and all elements: 
+# floatingips, private net and subnet, and router
+function delete_tenant_network() {
+  if [[ -z $TENANT_NAME ]]
+  then
+    echo "No tenant name was given. Skip delete tenant network"
+  else
+    # get tenant id
+    TENANT_ID=$(keystone tenant-list | get_field $TENANT_NAME 1)
+    if [[ -z $TENANT_ID ]]
+    then
+      echo "Could not find tenant with name $TENANT_NAME"
+    else
+      ROUTER_ID=$(quantum router-list --tenant_id=$TENANT_ID \
+                | awk -F'|' '!/^(\\+--)|name/ { print $2 }')
+      
+      echo "Cleaning up floating ips..."
+      while read -r FIP_UUID; do
+        if [[ -n $FIP_UUID ]]; then
+          quantum floatingip-disassociate $FIP_UUID
+          quantum floatingip-delete $FIP_UUID
+        fi
+      done < <(quantum floatingip-list --tenant_id=$TENANT_ID \
+               | awk -F'|' '!/^(\\+--)|id/ { print $2 }')
+      sleep 1
+      echo "Cleaning up virtual nics..."
+      while read -r PORT_UUID; do
+        if [[ -n $PORT_UUID ]]; then
+          quantum port-delete $PORT_UUID
+        fi
+      done < <(quantum port-list --tenant_id=$TENANT_ID \
+                --device_owner=compute:None \
+               | awk -F'|' '!/^(\\+--)| id/ { print $2 }')
+      sleep 1
+      echo "Cleaning up private subnets..."
+      while read -r SUBNET_UUID; do
+        if [[ -n $SUBNET_UUID ]]; then
+          quantum router-interface-delete $ROUTER_ID $SUBNET_UUID
+          sleep 2
+          quantum subnet-delete $SUBNET_UUID
+        fi
+      done < <(quantum subnet-list --enable_dhcp=True --tenant_id=$TENANT_ID \
+               | awk -F'|' '!/^(\\+--)|id/ { print $2 }')
+      sleep 1
+      echo "Cleaning up private networks..."
+      while read -r NET_UUID; do
+        if [[ -n $NET_UUID ]]; then
+          quantum net-delete $NET_UUID
+        fi
+      done < <(quantum net-list --router:external=False --tenant_id=$TENANT_ID \
+               | awk -F'|' '!/^(\\+--)|id/ { print $2 }')
+      sleep 1
+      if [[ -n $ROUTER_ID ]]; then
+        quantum router-gateway-clear $ROUTER_ID
+        sleep 2
+        quantum router-delete $ROUTER_ID
+      fi
+
+    fi
+  fi
+}
+
+function check_connection_to_host() {
+  echo >&2 -e "Checking connection to host $1...\c"
+  ping -c 1 $1 >& /dev/null
+  if [[ $? -ne 0 ]]; then
+    warning "No connection to host $1"
+    if [[ $2 = exit ]]; then
+      exit 1
+    fi
+    echo 'false'
+  else
+    echo >&2 "ok"
+    echo 'true'
+  fi
+}
+
+function calculate_all_devices() {
+  echo -e "\nCalculate migrated devices..."
+  FROM_L3_CONFIGS=$( get_agent_configs $FROM_L3_AGENT_ID )
+  FROM_ROUTERS=$( get_agent_property routers "$FROM_L3_CONFIGS" )
+  FROM_INTERFACES=$( get_agent_property interfaces "$FROM_L3_CONFIGS" )
+  FROM_F_IPS=$( get_agent_property floating_ips "$FROM_L3_CONFIGS" )
+  FROM_EX_GW_PORTS=$( get_agent_property ex_gw_ports "$FROM_L3_CONFIGS" )
+  FROM_DHCP_CONFIGS=$( get_agent_configs $FROM_DHCP_AGENT_ID )
+  FROM_SUBNETS=$( get_agent_property subnets "$FROM_DHCP_CONFIGS" )
+  FROM_NETWORKS=$( get_agent_property networks "$FROM_DHCP_CONFIGS" )
+  FROM_PORTS=$( get_agent_property ports "$FROM_DHCP_CONFIGS" )
+  echo -e "\nCalculate current devices on target node..."
+  TO_L3_CONFIGS=$( get_agent_configs $TO_L3_AGENT_ID )
+  TO_ROUTERS=$( get_agent_property routers "$TO_L3_CONFIGS" )
+  TO_INTERFACES=$( get_agent_property interfaces "$TO_L3_CONFIGS" )
+  TO_F_IPS=$( get_agent_property floating_ips "$TO_L3_CONFIGS" )
+  TO_EX_GW_PORTS=$( get_agent_property ex_gw_ports "$TO_L3_CONFIGS" )
+  TO_DHCP_CONFIGS=$( get_agent_configs $TO_DHCP_AGENT_ID )
+  TO_SUBNETS=$( get_agent_property subnets "$TO_DHCP_CONFIGS" )
+  TO_NETWORKS=$( get_agent_property networks "$TO_DHCP_CONFIGS" )
+  TO_PORTS=$( get_agent_property ports "$TO_DHCP_CONFIGS" )
+
+  TOTAL_ROUTERS=$(($FROM_ROUTERS+$TO_ROUTERS))
+  TOTAL_INTERFACES=$(($FROM_INTERFACES+$TO_INTERFACES))
+  TOTAL_F_IPS=$(($FROM_F_IPS+$TO_F_IPS))
+  TOTAL_EX_GW_PORTS=$(($FROM_EX_GW_PORTS+$TO_EX_GW_PORTS))
+  TOTAL_SUBNETS=$(($FROM_SUBNETS+$TO_SUBNETS))
+  TOTAL_NETWORKS=$(($FROM_NETWORKS+$TO_NETWORKS))
+  TOTAL_PORTS=$(($FROM_PORTS+$TO_PORTS))
+}
+
+# Check L3 Agent for clean task or report task
+function check_router_netns() {
+  ACTION=$1
+  AGENT_ID=$2
+  count=7
+  while true; do
+    L3_CONFIGS=$( get_agent_configs $AGENT_ID )
+    ROUTERS=$( get_agent_property routers "$L3_CONFIGS" )
+    echo " / $TOTAL_ROUTERS total"
+    INTERFACES=$( get_agent_property interfaces "$L3_CONFIGS" )
+    echo " / $TOTAL_INTERFACES total"
+    F_IPS=$( get_agent_property floating_ips "$L3_CONFIGS" )
+    echo " / $TOTAL_F_IPS total"
+    EX_GW_PORTS=$( get_agent_property ex_gw_ports "$L3_CONFIGS" )
+    echo " / $TOTAL_EX_GW_PORTS total"
+    if [[ $ACTION = clean
+      && $ROUTERS = 0 && $INTERFACES = 0 && $F_IPS = 0 && $EX_GW_PORTS = 0 ]]
+    then
+      echo "Netns q-routers on $SOURCE_HOST is CLEAN"
+      NETNS_ROUTERS_CLEAN=true
+      break
+    fi
+    if [[ $ACTION = report
+      && $ROUTERS -ge $TOTAL_ROUTERS && $INTERFACES -ge $TOTAL_INTERFACES 
+      && $F_IPS -ge $TOTAL_F_IPS && $EX_GW_PORTS -ge $TOTAL_EX_GW_PORTS ]]
+    then
+      echo "All q-router devices migrated successfully"
+      NETNS_ROUTERS_ADDED=true
+      break
+    fi
+    count=$((count-1))
+    if [[ $count -eq 0 ]]
+    then
+      if [[ $ACTION = clean ]]; then
+        warning "Could not clean all q-router devices on $SOURCE_HOST"
+        NETNS_ROUTERS_CLEAN=false
+      elif [[ $ACTION = report ]]; then
+        warning "Not all q-router devices added to $TARGET_HOST"
+        NETNS_ROUTERS_ADDED=false
+      fi
+      WAIT=$( ask_question_yn "If number of devices keep on changing, migration\
+ still in good progress. Do you want to wait for 30 secs more?" )
+      if [[ $WAIT = y ]]; then
+        count=6
+      else
+        break
+      fi
+    fi
+    secs=$((count*5))
+    echo "waiting for $secs seconds..."
+    sleep 5
+  done
+}
+
+# Check DHCP Agent if all devices are cleared
+function check_dhcp_netns() {
+  ACTION=$1
+  AGENT_ID=$2
+  echo -e "\nChecking status from dhcp Agent $AGENT_ID..."
+  count=6
+  while true; do
+    DHCP_CONFIGS=$( get_agent_configs $AGENT_ID )
+    SUBNETS=$( get_agent_property subnets "$DHCP_CONFIGS" )
+    echo " / $TOTAL_SUBNETS total"
+    NETWORKS=$( get_agent_property networks "$DHCP_CONFIGS" )
+    echo " / $TOTAL_NETWORKS total"
+    PORTS=$( get_agent_property ports "$DHCP_CONFIGS" )
+    echo " / $TOTAL_PORTS total"
+    if [[ $ACTION = clean
+      && $SUBNETS = 0 && $NETWORKS = 0 && $PORTS = 0 ]]
+    then
+      echo "Netns q-dhcp on $SOURCE_HOST is CLEAN"
+      NETNS_DHCP_CLEAN=true
+      break
+    fi
+    if [[ $ACTION = report
+      && $SUBNETS -ge $TOTAL_SUBNETS && $NETWORKS -ge $TOTAL_NETWORKS
+      && $PORTS -ge $TOTAL_PORTS ]]
+    then
+      echo "All q-dhcp devices migrated successfully"
+      NETNS_DHCP_ADDED=true
+      break
+    fi
+    count=$((count-1))
+    if [[ $count -eq 0 ]]
+    then
+      if [[ $ACTION = clean ]]; then
+        warning "Could not clean netns q-dhcp on $SOURCE_HOST"
+        NETNS_DHCP_CLEAN=false
+      elif [[ $ACTION = report ]]; then
+        warning "Not all q-dhcp devices added to $TARGET_HOST"
+        NETNS_DHCP_ADDED=false
+      fi
+      WAIT=$( ask_question_yn "If number of devices above keep on changing, \
+migration still in good progress. Do you want to wait for 30 secs more?" )
+      if [[ $WAIT = y ]]; then
+        count=6
+      else
+        break
+      fi
+    fi
+    secs=$((count*5))
+    echo "waiting for $secs seconds..."
+    sleep 5
+  done
+}
+
+# delete obsolete netns on physical host
+function delete_netns_on_physical_host() {
+  ssh $1 'python /usr/bin/quantum-netns-cleanup'
+  if [[ $? -eq 0 ]]
+  then
+    echo "All netns on $1 are CLEAN and DELETED" 
+  else
+    warning "Netns on $1 are clean, but failed to delete"
+    reboot=$(ask_question_yn "Reboot $1 can delete all obsolete netns(optional)\
+. Do you want to reboot (y) or just leave it be at the current state (n)?")
+    if [[ $reboot = y ]]
+    then
+      reboot_node $1
+    fi
+  fi
+}
+
+# for all routers on from source l3 agent, move to the target
+function move_routers_from_l3_agent() {
+  while read -r ROUTER_UUID; do
+    if [[ -n $ROUTER_UUID ]]; then
+      quantum l3-agent-router-remove $FROM_L3_AGENT_ID $ROUTER_UUID
+      quantum l3-agent-router-add $TO_L3_AGENT_ID $ROUTER_UUID
+    fi
+  done < <(quantum router-list-on-l3-agent $FROM_L3_AGENT_ID \
+          | awk -F'|' '!/^(\\+--)|name/ { print $2 }')
+}
+
+# for all private networks on source dhcp agent, move to target
+function move_private_networks_from_dhcp_agent() {
+  while read -r NETWORK_UUID; do
+    if [[ -n $NETWORK_UUID ]]; then
+      quantum dhcp-agent-network-remove $FROM_DHCP_AGENT_ID $NETWORK_UUID
+      quantum dhcp-agent-network-add $TO_DHCP_AGENT_ID $NETWORK_UUID
+    fi
+  done < <(quantum net-list-on-dhcp-agent $FROM_DHCP_AGENT_ID \
+          | awk -F'|' '!/^(\\+--)|name/ { print $2 }')
+}
+
+# unlucky you when got into here, must ensure a reboot
+function reboot_node() {
+  warning "Node $1 is going to reboot..."
+  ssh $1 reboot
+  if [[ $? -eq 0 ]]; then
+    echo "Node reboot sucessfully"
+  else
+    warning "Node reboot failed. REBOOT manually BEFORE you can continue"
+    op_reboot=$( ask_question_yn "Did you reboot $1?" )
+    if [[ $op_reboot = n ]]; then
+      reboot_node $1
+    fi
+  fi
+}
+
+# bring given interface of given host UP or DOWN
+function if_config() {
+  IF=$1
+  HOST=$2
+  STATUS=$3
+  echo "Bringing $IF of $HOST $STATUS..."
+  # enable/disable auto interface on reboot
+  if [[ $STATUS = UP ]]
+  then
+    OLD_CONFIG="#auto $IF"
+    NEW_CONFIG="auto $IF"
+  else
+    OLD_CONFIG="auto $IF"
+    NEW_CONFIG="#auto $IF"
+  fi
+  COMMAND="sed -i 's/^$OLD_CONFIG/$NEW_CONFIG/g' /etc/network/interfaces
+ && ip link set $IF ${STATUS,,}"
+  ssh $HOST $COMMAND
+  if [[ $? -eq 0 ]]
+  then
+    echo "Verfiying ifconfig..."
+    ssh $HOST ip link show $IF | grep $STATUS
+    if [[ $? -eq 0 ]]; then
+      echo "Brought $IF on $HOST $STATUS successfully"
+    else
+      warning "Failed to bring $IF on $HOST $STATUS. Login to neutron and execute
+manually: $COMMAND"
+      exit 1
+    fi
+  else
+    warning "Failed to bring $IF on $HOST $STATUS. Login to neutron and execute
+manually: $COMMAND"
+    exit 1
+  fi
+}
+
+function migrate_all_tenant_networks() {
+  if [[ -z $SOURCE_HOST || -z $TARGET_HOST ]]; then
+    warning "Missing mandatory source host or target host"
+    exit
+  fi
+  SOURCE_HOST=$(add_domain_to_host $SOURCE_HOST)  
+  TARGET_HOST=$(add_domain_to_host $TARGET_HOST)
+
+  check_connection_to_host $TARGET_HOST exit
+  # check if source host is available
+  SOURCE_HOST_AVAILABLE=$( check_connection_to_host $SOURCE_HOST )
+
+  echo -e "\nChecking agents on target host..."
+  check_agent_active 'Open vSwitch agent' $TARGET_HOST exit
+  check_agent_active 'L3 agent' $TARGET_HOST exit
+  check_agent_active 'DHCP agent' $TARGET_HOST exit
+  
+  SOURCE_AGENTS_ACTIVE=true
+  # Check if any agents on soure host inactive and set SOURCE_AGENTS_ACTIVE
+  echo -e "\nChecking agents on source host..."
+  check_agent_active 'Open vSwitch agent' $SOURCE_HOST
+  check_agent_active 'L3 agent' $SOURCE_HOST
+  check_agent_active 'DHCP agent' $SOURCE_HOST
+
+  # prepare data
+  FROM_L3_AGENT_ID=$( get_agent_id 'L3 agent' $SOURCE_HOST )
+  FROM_DHCP_AGENT_ID=$( get_agent_id 'DHCP agent' $SOURCE_HOST )
+  TO_L3_AGENT_ID=$( get_agent_id 'L3 agent' $TARGET_HOST )
+  TO_DHCP_AGENT_ID=$( get_agent_id 'DHCP agent' $TARGET_HOST )
+
+  calculate_all_devices
+
+  # if source host not available
+  if [[ $SOURCE_HOST_AVAILABLE = false ]]
+  then
+    warning "No connections to $SOURCE_HOST over mgnt network. POWER OFF this 
+machine BEFORE you can continue"
+    ask_question "Did you power off $SOURCE_HOST? No to quit. Yes to continue"
+  fi
+  echo -e "\n\nREMOVE NETNS FROM $SOURCE_HOST"
+  echo "Moving all networks from DHCP Agent $FROM_DHCP_AGENT_ID..."
+  move_private_networks_from_dhcp_agent
+  sleep 1
+  echo -e "\nMoving all routers from L3 Agent $FROM_L3_AGENT_ID..."
+  move_routers_from_l3_agent
+
+  if [[ $SOURCE_HOST_AVAILABLE = true ]]
+  then
+    if [[ $SOURCE_AGENTS_ACTIVE = true ]]
+    then
+      # poll and check netns, and set NETNS_CLEAN if clean
+      echo -e "\nVALIDATE REMOVE ON $SOURCE_HOST"
+      echo "Checking status from L3 Agent..."
+      check_router_netns clean $FROM_L3_AGENT_ID
+      echo "Checking status from DHCP Agent..."
+      check_dhcp_netns clean $FROM_DHCP_AGENT_ID
+      if [[ $NETNS_ROUTERS_CLEAN = false || NETNS_DHCP_CLEAN = false ]]
+      then
+        reboot_node $SOURCE_HOST
+      fi
+    # if one agent on source neutron inactive, no need to wait, force reboot
+    else
+      warning "One or more agent on source neutron INACTIVE"
+      reboot_node $SOURCE_HOST
+    fi
+  fi
+  # optional
+  del_netns=$(ask_question_yn "Netns on $SOURCE_HOST are clean. Do you want to\
+delete obsolete netns on this host?")
+  if [[ $del_netns = y ]]
+  then
+    echo -e "\nDeleting obsolete netns on $SOURCE_HOST..."
+    delete_netns_on_physical_host $SOURCE_HOST
+  fi
+  # Validate migration reults
+  echo -e "\nVALIDATE RESULTS ON $TARGET_HOST"
+  echo "Checking status from L3 Agent..."
+  check_router_netns report $TO_L3_AGENT_ID
+  echo "Checking status from DHCP Agent..."
+  check_dhcp_netns report $TO_DHCP_AGENT_ID
+  if [[ $NETNS_ROUTERS_ADDED = true && $NETNS_DHCP_ADDED == true ]]; then
+    echo "MIGRATION SUCCESSFULLY"
+    if_config $PUBLIC_IF $SOURCE_HOST DOWN
+    if_config $PUBLIC_IF $TARGET_HOST UP
+  else
+    echo "MIGRATION NOT (YET) COMPLETED"
+  fi
+}
+
+HELP="
+To create network for a given tenant on a target neutron node
+    \e[1;31m tenant-network create TENANT_NAME -o TARGET_NEUTRON 
+                                      [-c CIDR]  [-n NAMESERVERS]
+                                      [-u USERS] [-s DESCRIPTION] [-f]\e[0m
+To delete network for a given tenant
+    \e[1;31m tenant-network delete TENANT_NAME [-f]\e[0m
+To migrate all tenant networks from source neutron to target neutron node
+    \e[1;31m tenant-network migrate all -i SOURCE_NEUTRON -o TARGET_NEUTRON\e[0m
+
+Parameters:
+    TENANT_NAME           unique name of tenant
+    CIDR                  cidr of tenant subnet. Default: <%= private_net_range %>
+    NAMESERVERS           a comma delimited list of DNS nameserver for network.
+                          Default: 8.8.8.8,8.8.4.4
+    USERS                 a comma delimited list of users added as role Member.
+                          Example: ops,tpm
+    DESCRIPTION           tenant description
+
+    SOURCE_NEUTRON        alias or fqdn of neutron node to remove router and dhcp
+    TARGET_NEUTRON        alias or fqdn of neutron node to deploy router and dhcp
+
+Non-arguments parameters:
+    -f                    force run. Answer all questions with yes. Use with care
+"
+
+# args parser
+OPTIND=3
+while getopts c:n:u:s:i:o:f OPT; do
+  case "$OPT" in
+    c)
+      PRIVATE_NET_RANGE=$OPTARG
+      ;;
+    n)
+      IFS=', ' read -a NAMESERVERS <<< $OPTARG
+      ;;
+    u)
+      IFS=', ' read -a USERS <<< $OPTARG
+      ;;
+    s)
+      TENANT_DESCRIPTION=$OPTARG
+      ;;
+    i)
+      SOURCE_HOST=$OPTARG
+      ;;
+    o)
+      TARGET_HOST=$OPTARG
+      ;;
+    f)
+      FORCE=true
+      ;;  
+    \?)
+      echo $HELP >&2
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND))
+
+COMMAND=$1
+
+# main
+# delete tenant network
+if [[ $COMMAND = delete ]]; then
+  TENANT_NAME=$2
+  ask_question "This will delete network of tenant $TENANT_NAME and all of its elements: 
+floatingips, private network, subnet, and tenant router. Do you want to proceed?"
+  delete_tenant_network
+
+# create tenant network
+elif [[ $COMMAND = create ]]; then
+  if [[ -n $2 ]]; then
+    TENANT_NAME=$2
+  fi
+  # create external networks if not exist
+  create_ext_network
+  # create per tenant router and private network if not exist
+  set_tenant_net
+  create_tenant_network
+elif [[ $COMMAND = migrate ]]; then
+  TENANT_NAME=$2
+  if [[ $TENANT_NAME = all ]]; then
+    migrate_all_tenant_networks
+  else
+    # migrate a specific tenant name is not support atm. At least call with all
+    warning 'Write all to migrate all tenants'
+  fi
+else
+  echo -e "$HELP"
+fi

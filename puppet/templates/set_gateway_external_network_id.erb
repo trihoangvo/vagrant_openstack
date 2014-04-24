@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2014 Deutsche Telekom
+# Author: Tri Hoang Vo <vohoangtri at gmail.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# Execute this script as root to config /etc/quantum/l3_agent.ini with 
+# gateway_external_network_id. This value is an uuid of the external network
+# that the L3 agent has to start with.
+# 
+# The first input param is name of the external network you want the L3
+# agent to start with. 
+# For example: set_gateway_external_network_id.sh public_net1
+
+AUTH_CONF=/etc/quantum/metadata_agent.ini
+
+# help function
+# return configuration value of a given config in NOVA_API_CONF
+# value is strip with white space
+function read_auth_conf () {
+  key=$1
+  value=`sudo awk -F "=" "/$key/ {print \\$2}" $AUTH_CONF | tr -d ' '`
+  echo $value
+}
+
+# help function
+# get a field value from a python PrettyTable format
+function get_field() {
+  while read data; do
+    colum="\$$(($2 + 1))"
+    echo "$data" | grep " $1 " | awk -F'[ \t]*\\|[ \t]*' "{print $colum}"
+  done
+}
+
+export OS_USERNAME=$( read_auth_conf admin_user )
+export OS_PASSWORD=$( read_auth_conf admin_password )
+export OS_TENANT_NAME=$( read_auth_conf admin_tenant_name )
+export OS_AUTH_URL=$( read_auth_conf auth_url )
+
+if [[ -z $1 ]]; then
+  echo "Network name missing. Specfiy an existing network name as 1st parameter"
+  exit 1
+else
+  PUBLIC_NET_NAME=$1
+  while [[ -z $NET_ID ]]
+  do
+    NET_ID=$(quantum net-list | get_field $PUBLIC_NET_NAME 1)
+    if [[ -z $NET_ID ]]; then
+      echo "Found no uuid for the given network name. Network $PUBLIC_NET_NAME probably not yet created by the control node. Now waiting in 10s and execute again"
+      sleep 10
+    else
+      # search for gateway_external_network_id in /etc/quantum/l3_agent.ini
+      # and set value to NET_ID
+      sed -i "s/^# gateway_external_network_id.*/gateway_external_network_id=$NET_ID/g" /etc/quantum/l3_agent.ini
+      echo "Set gateway_external_network_id = $NET_ID"
+    fi
+  done
+  service quantum-l3-agent restart
+fi

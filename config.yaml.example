@@ -1,0 +1,122 @@
+# Environment settings
+######################
+
+# Set the desired environment to deploy: devstack or puppet
+env: puppet
+
+# PUPPET
+# select deb package repository for openstack release on
+# http://ubuntu-cloud.archive.canonical.com/ubuntu
+puppet_cloudarchive: precise-updates/icehouse
+# provide the git repo of puppet manifests to deploy openstack
+puppet_giturl: https://github.com/trihoangvo/vagrant_openstack_puppet.git
+puppet_branch: master
+# location of site.pp for nodes definition on the repo
+puppet_site_pp: manifests/site.pp.vagrant
+# If the git repository requires ssh authentication, set this to true
+git_auth_required: false
+# if true, provides private key for ssh to the git repo
+git_id_rsa: files/id_rsa
+
+# DEVSTACK
+# provide the git repository of devstack
+devstack_git_url: https://github.com/openstack-dev/devstack.git
+devstack_branch: master
+
+# Base box
+##########
+# provide a vagrant box to bring vm up
+#base_box_name: precise64
+#base_box_url: http://files.vagrantup.com/precise64.box
+base_box_name: TelekomCloud/precise64
+base_box_url: https://vagrantcloud.com/TelekomCloud/precise64/version/1/provider/virtualbox.box
+
+# Cache settings
+################
+# set to true to enable caching installed packages and image
+cache_enabled: true
+# where to store cache. Left empty to use the working directory of this project
+cache_dir:
+
+# cache and use the following glance image on control node
+# cache_img_name: ubuntu-12.04-server-cloudimg-amd64-disk1.img
+# cache_img_get: http://uec-images.ubuntu.com/releases/precise/release/ubuntu-12.04-server-cloudimg-amd64-disk1.img
+cache_img_name: cirros-0.3.2-x86_64-disk.img
+cache_img_get: http://download.cirros-cloud.net/0.3.2/cirros-0.3.2-x86_64-disk.img
+
+####################################
+# advanced modifications from here #
+####################################
+
+# Network Settings
+##################
+
+# private management network
+private_mgt_net: 192.168.56.
+# private data network
+private_data_net: 192.168.57.
+# public network
+public_net1: 192.168.58.
+public_net2: 192.168.58.
+
+domain: local
+
+# VM Settings
+#############
+puppet_hostname: puppet
+puppet_cpu: 1
+puppet_ram: 512
+puppet_ip: 10          # 192.168.56.10
+
+control_hostname: control
+control_cpu: 1
+control_ram: 1024
+control_ip: 2          # 192.168.56.2
+
+compute1_hostname: compute1
+compute1_cpu: 2        # increase this value for booting more than 1 vm on compute node
+compute1_ram: 1024
+compute1_ip: 31        # 192.168.56.31, 192.168.57.31
+
+compute2_enabled: false
+compute2_hostname: compute2
+compute2_cpu: 2
+compute2_ram: 1024
+compute2_ip: 32        # 192.168.56.32, 192.168.57.32
+
+neutron1_hostname: neutron1
+neutron1_cpu: 1
+neutron1_ram: 1024
+neutron1_ip: 41        # 192.168.56.41, 192.168.57.41
+neutron1_public_ip: 4  # 192.168.58.4
+
+neutron2_enabled: false
+neutron2_hostname: neutron2
+neutron2_cpu: 1
+neutron2_ram: 1024
+neutron2_ip: 42        # 192.168.56.42, 192.168.57.42
+neutron2_public_ip: 4  # 192.168.58.4
+
+# Cinder
+########
+# absolute path where to store virtual storage cinder.vdi mounts to control vm
+# left empty to use the default folder of VirtualBox
+cinder_storage_dir:
+# name the vdi
+cinder_storage_file: cinder
+# virtual storage can grow up to 80GB
+cinder_storage_size: 80000
+
+# Tenant network
+################
+
+# default config for tenant network
+private_net_range: 10.10.0.0/24
+
+# default config for public net
+public_net_name: public_net1
+# net interface of neutron vm to upstream
+public_net_interface: eth3
+# start and end of allocation pool for public net
+pool_start: 5
+pool_end: 20

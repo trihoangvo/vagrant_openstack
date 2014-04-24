@@ -1,0 +1,26 @@
+[main]
+logdir = /var/log/puppet
+vardir = /var/lib/puppet
+ssldir = /var/lib/puppet/ssl
+rundir = /var/run/puppet
+factpath = $vardir/lib/facter
+templatedir = /opt/deploy/templates
+manifestdir = /opt/deploy/manifests
+modulepath = /opt/deploy/modules
+pluginsync = true
+certificate_revocation = false
+
+[master]
+ssl_client_header = SSL_CLIENT_S_DN
+ssl_client_verify_header = SSL_CLIENT_VERIFY
+storeconfigs = true
+storeconfigs_backend = puppetdb
+autosign = true
+#dbadapter = mysql
+#dbuser = puppet
+#dbpassword = puppet
+#dbsocket = /var/run/mysqld/mysqld.sock
+
+[agent]
+certname = <%= @hostname %>
+server = puppet
