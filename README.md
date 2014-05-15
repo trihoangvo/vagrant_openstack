@@ -171,7 +171,9 @@ wip
 
 Copyright (C) 2014 Deutsche Telekom
 
-Author: Tri Hoang Vo
+Author: Tri Hoang Vo <vohoangtri@gmail.com>
+
+Contributors: Willy Otto <w.otto@telekom.de>
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

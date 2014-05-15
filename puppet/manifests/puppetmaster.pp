@@ -12,6 +12,10 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+#
+## Contributors:
+# Willy Otto <w.otto@telekom.de>
+##
 
 # set a default path for all execs
 Exec { path => [ "/bin/", "/sbin/" , "/usr/bin/", "/usr/sbin/", "/usr/local/bin/", "/opt/vagrant_ruby/bin/" ] }
