@@ -31,22 +31,22 @@ disable_service n-net
 disable_service tempest
 
 # heat
-enable_service heat h-api h-api-cfn h-api-cw h-eng
+# enable_service heat h-api h-api-cfn h-api-cw h-eng
 
 # quantum
-enable_service neutron q-svc
+enable_service quantum q-svc
 Q_USE_SECGROUP=True
 
 # cinder
 VOLUME_GROUP=cinder-volumes
 
 # repo
-NOVA_BRANCH=<%= @devstack_branch %>
-CINDER_BRANCH=<%= @devstack_branch %>
-GLANCE_BRANCH=<%= @devstack_branch %>
-KEYSTONE_BRANCH=<%= @devstack_branch %>
-QUANTUM_BRANCH=<%= @devstack_branch %>
-HORIZON_BRANCH=<%= @devstack_branch %>
+NOVA_BRANCH=<%= @openstack_branch %>
+CINDER_BRANCH=<%= @openstack_branch %>
+GLANCE_BRANCH=<%= @openstack_branch %>
+KEYSTONE_BRANCH=<%= @openstack_branch %>
+QUANTUM_BRANCH=<%= @openstack_branch %>
+HORIZON_BRANCH=<%= @openstack_branch %>
 
 DEFAULT_IMAGE_NAME=<%= @devstack_img_name %>
 IMAGE_URLS=<%= @devstack_img_urls %>

@@ -2,12 +2,12 @@
 ######################
 
 # Set the desired environment to deploy: devstack or puppet
-env: puppet
+env: devstack
 
 # PUPPET
 # select deb package repository for openstack release on
 # http://ubuntu-cloud.archive.canonical.com/ubuntu
-puppet_cloudarchive: precise-updates/icehouse
+puppet_cloudarchive: precise-updates/grizzly
 # provide the git repo of puppet manifests to deploy openstack
 puppet_giturl: https://github.com/trihoangvo/vagrant_openstack_puppet.git
 puppet_branch: master
@@ -21,7 +21,9 @@ git_id_rsa: files/id_rsa
 # DEVSTACK
 # provide the git repository of devstack
 devstack_git_url: https://github.com/openstack-dev/devstack.git
-devstack_branch: master
+devstack_branch: grizzly-eol
+# branch of OpenStack projects
+openstack_branch: 2013.1.4
 
 # Base box
 ##########

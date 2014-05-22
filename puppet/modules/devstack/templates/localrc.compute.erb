@@ -30,13 +30,13 @@ KEYSTONE_AUTH_HOST=$CONTROL_HOST
 KEYSTONE_SERVICE_HOST=$CONTROL_HOST
 DATABASE_TYPE=mysql # fix missing sql_connection in quantum plugin
 
-ENABLED_SERVICES=n-cpu,q-agt,neutron,rabbit
+ENABLED_SERVICES=n-cpu,q-agt,quantum,rabbit
 Q_USE_SECGROUP=True
 
 # repo
-NOVA_BRANCH=<%= @devstack_branch %>
-CINDER_BRANCH=<%= @devstack_branch %>
-GLANCE_BRANCH=<%= @devstack_branch %>
-KEYSTONE_BRANCH=<%= @devstack_branch %>
-QUANTUM_BRANCH=<%= @devstack_branch %>
-HORIZON_BRANCH=<%= @devstack_branch %>
+NOVA_BRANCH=<%= @openstack_branch %>
+CINDER_BRANCH=<%= @openstack_branch %>
+GLANCE_BRANCH=<%= @openstack_branch %>
+KEYSTONE_BRANCH=<%= @openstack_branch %>
+QUANTUM_BRANCH=<%= @openstack_branch %>
+HORIZON_BRANCH=<%= @openstack_branch %>
