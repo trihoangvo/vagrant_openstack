@@ -48,23 +48,24 @@ class common {
     refreshonly => true
   }
 
+  # # both devstack and puppet require cloudarchive
+  include apt
+  apt::source { 'cloudarchive':
+    location    => 'http://ubuntu-cloud.archive.canonical.com/ubuntu',
+    repos       => 'main',
+    release     => $puppet_cloudarchive,
+    require     => Package['ubuntu-cloud-keyring'],
+    include_src => false
+  }
+
+  package { 'ubuntu-cloud-keyring':
+    ensure => present,
+    require => Exec['apt-get update']
+  }
+
   # for environment openstack-deploy
   # source ubuntu cloud, setup puppet
   if $env == 'puppet' {
-    include apt
-    apt::source { 'cloudarchive':
-      location    => 'http://ubuntu-cloud.archive.canonical.com/ubuntu',
-      repos       => 'main',
-      release     => $puppet_cloudarchive,
-      require     => Package['ubuntu-cloud-keyring'],
-      include_src => false
-    }
-
-    package { 'ubuntu-cloud-keyring':
-      ensure => present,
-      require => Exec['apt-get update']
-    }
-
     apt::source { 'puppetlabs':
       location    => 'http://apt.puppetlabs.com',
       repos       => 'main dependencies',

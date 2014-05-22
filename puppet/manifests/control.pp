@@ -55,6 +55,7 @@ if $env == 'devstack' {
   class {'devstack::params':
     devstack_git_url    => $devstack_git_url,
     devstack_branch     => $devstack_branch,
+    openstack_branch    => $openstack_branch,
     devstack_img_name   => $devstack_img_name,
     devstack_img_urls   => $devstack_img_urls,
   }

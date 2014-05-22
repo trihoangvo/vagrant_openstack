@@ -60,7 +60,8 @@ class devstack::install {
   # git checkout my devstack
   exec { "checkout_devstack":
     cwd       => $devstack::params::home_dir,
-    command   => "/usr/bin/git clone ${devstack::params::devstack_git_url}",
+    # work around git 1.7.9.5 not supported git checkout -b <tag version>
+    command   => "/usr/bin/git clone ${devstack::params::devstack_git_url} && cd devstack && git checkout ${devstack::params::devstack_branch}",
     creates   => "${devstack::params::devstack_dir}/.git",
     user      => "vagrant",
     group     => "vagrant",

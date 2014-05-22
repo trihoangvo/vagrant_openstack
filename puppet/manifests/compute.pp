@@ -29,8 +29,9 @@ class { 'common': }
 # setup devstack
 if $env == 'devstack' {
   class {'devstack::params':
-  	devstack_git_url => $devstack_git_url,
+    devstack_git_url => $devstack_git_url,
     devstack_branch  => $devstack_branch,
+    openstack_branch => $openstack_branch,
   }
   class {'devstack::compute':
     stage           => last,

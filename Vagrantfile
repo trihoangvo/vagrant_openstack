@@ -157,6 +157,7 @@ Vagrant.configure("2") do |config|
       "puppet_cloudarchive"  => CONF['puppet_cloudarchive'],
       "devstack_git_url"     => CONF['devstack_git_url'],
       "devstack_branch"      => CONF['devstack_branch'],
+      "openstack_branch"     => CONF['openstack_branch'],
       "devstack_img_name"    => CONF['cache_img_name'],
       "devstack_img_urls"    => CONF['cache_img_get'],
     },
@@ -168,6 +169,7 @@ Vagrant.configure("2") do |config|
       "puppet_cloudarchive"  => CONF['puppet_cloudarchive'],
       "devstack_git_url"     => CONF['devstack_git_url'],
       "devstack_branch"      => CONF['devstack_branch'],
+      "openstack_branch"     => CONF['openstack_branch'],
     },
     :neutron2 => {
       "public_net_gateway"   => nodes[:neutron2][:ip_pub],
@@ -177,12 +179,14 @@ Vagrant.configure("2") do |config|
       "puppet_cloudarchive"  => CONF['puppet_cloudarchive'],
       "devstack_git_url"     => CONF['devstack_git_url'],
       "devstack_branch"      => CONF['devstack_branch'],
+      "openstack_branch"     => CONF['openstack_branch'],
     },
     :compute => {
       "env"                  => $env,
       "puppet_cloudarchive"  => CONF['puppet_cloudarchive'],
       "devstack_git_url"     => CONF['devstack_git_url'],
       "devstack_branch"      => CONF['devstack_branch'],
+      "openstack_branch"     => CONF['openstack_branch'],
     }
   }
 

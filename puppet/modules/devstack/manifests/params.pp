@@ -28,6 +28,7 @@ class devstack::params (
   $openstack_data_dir  = "/opt/data",
   # branch
   $devstack_branch     = "master",
+  $openstack_branch    = "master",
   $devstack_img_name   = undef,
   $devstack_img_urls   = undef,
 ) {
