@@ -19,7 +19,7 @@
 # Vagrantfile bring up openStack VMs
 
 require "yaml"
-require 'net/http'
+require 'open-uri'
 
 _config = YAML.load(File.open(File.join(File.dirname(__FILE__),
                     "config.yaml"), File::RDONLY).read)
@@ -43,14 +43,12 @@ if CONF['cache_enabled'] == true
   cache_img_file = "#{cache_dir}/#{CONF['cache_img_name']}"
   puts "Cache enabled: #{cache_dir}"
   if $env == "puppet" and not File.exist?(cache_img_file)
-    uri = URI(CONF['cache_img_get'])
-    puts "#{CONF['cache_img_name']} not exists, start download from #{uri.host}"
-         " Please wait.."
-    Net::HTTP.start(uri.host) { |http|
-      resp = http.get(uri.path)
-      open(cache_img_file, "wb") { |file|
-       file.write(resp.body)
-      }
+    puts "#{CONF['cache_img_name']} not exists, start download from "\
+          "#{CONF['cache_img_get']} Please wait.."
+    open(CONF['cache_img_get']) {|f|
+      File.open(cache_img_file,"wb") do |file|
+        file.puts f.read
+      end
     }
   end
 end
